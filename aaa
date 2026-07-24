@@ -1,0 +1,106 @@
+# Embedding model registry-delivery matrix
+
+## Scope
+
+This matrix covers the embedding options evaluated for the GoTo project under
+one unusual but strict constraint: the DevPod can download packages only through
+its approved NPM and PyPI/`uv` proxies. It cannot download model files directly
+from Hugging Face, GitHub releases, or arbitrary CDNs.
+
+The ✅ column means that the registry artifact itself contains the model weights.
+A ❌ means that installing the package provides inference code but a separate
+model download is still required. Only ✅ rows are immediately usable under the
+current DevPod policy.
+
+Dates use `DD.MM.YYYY`. They refer to the model artifact or port listed in the
+row, not to the latest release of the surrounding inference library. Sizes are
+model-weight sizes, not Python/JavaScript library sizes. When weights are fused
+with an engine inside WASM and cannot be separated, the WASM container size is
+reported explicitly.
+
+## Matrix
+
+| Registry | Package / model | Dimensions | Model size | Languages | Release date | Weights included |
+| --- | --- | ---: | ---: | --- | ---: | :---: |
+| NPM | **`@ternlight/mini@0.1.0` / Ternlight Mini** — current standalone-browser choice | 384 | 7.22 MiB raw model+engine WASM; about 5.5 MB compressed on the wire | English | 05.07.2026 | ✅ |
+| NPM | `@ternlight/base@0.1.0` / Ternlight Base | 384 | 9.75 MiB raw model+engine WASM; about 7 MB compressed on the wire | English | 05.07.2026 | ✅ |
+| NPM | **`@plurnk/plurnk-mimetypes-embeddings@1.2.0` / `Xenova/all-MiniLM-L6-v2` Q8** — current backend-quality choice | 384 | 21.91 MiB ONNX weights | English | 02.05.2023 | ✅ |
+| NPM | `@huggingface/transformers` / `Xenova/all-MiniLM-L6-v2` Q8 | 384 | about 21.91 MiB | English | 02.05.2023 | ❌ |
+| NPM | `@huggingface/transformers` / `Xenova/paraphrase-multilingual-MiniLM-L12-v2` Q8 | 384 | 112.83 MiB | Multilingual | 15.05.2023 | ❌ |
+| NPM | `@chroma-core/default-embed` / `Xenova/all-MiniLM-L6-v2` | 384 | about 21.91 MiB Q8 or 86.66 MiB FP32, depending on configured dtype | English | 02.05.2023 | ❌ |
+| NPM | `ruvector-onnx-embeddings-wasm` / `all-MiniLM-L6-v2` | 384 | about 23 MB | English | 02.03.2022 | ❌ |
+| PyPI | `sentence-transformers` / `sentence-transformers/all-MiniLM-L6-v2` FP32 | 384 | 86.66 MiB | English | 02.03.2022 | ❌ |
+| PyPI | `sentence-transformers` / `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` FP32 | 384 | 448.84 MiB | Multilingual | 02.03.2022 | ❌ |
+| PyPI | `fastembed` / `BAAI/bge-small-en-v1.5` quantized ONNX | 384 | about 0.067 GB | English | 12.09.2023 | ❌ |
+| PyPI | `fastembed` / `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` quantized ONNX | 384 | about 0.220 GB | Multilingual | 02.03.2022 | ❌ |
+| PyPI | `fastembed` / `intfloat/multilingual-e5-large` | 1,024 | about 2.240 GB | Multilingual | 30.06.2023 | ❌ |
+
+## Decision
+
+- **Smallest practical standalone browser model:** Ternlight Mini. It is the
+  lightest audited registry-contained model, embeds queries quickly, and was
+  successfully validated in the target DevPod and Chrome `file://` flow.
+- **Higher-quality registry-contained backend model:** the bundled MiniLM Q8
+  artifact from `@plurnk/plurnk-mimetypes-embeddings`. The model, tokenizer, and
+  ONNX Runtime Web assets are present in the NPM tarball. The package itself
+  declares Node `>=26`; the DevPod builder therefore extracts its static assets
+  and uses Python ONNX Runtime instead of executing its Node API on Node 22.
+- **Ternlight Base:** a reasonable browser/server middle option when the extra
+  few megabytes and latency are acceptable. It was not part of the completed
+  GoTo browser benchmark, so its relevance and startup trade-off must be measured
+  before replacing Mini.
+- **Multilingual requirement:** none of the audited multilingual rows ships its
+  weights inside an approved NPM/PyPI artifact. They remain unusable under the
+  current registry-only policy unless the organization mirrors a pinned model
+  artifact into NPM or PyPI.
+
+The current GoTo descriptions are English, so Ternlight Mini and MiniLM are
+appropriate for document embeddings. An Italian query is not guaranteed to map
+correctly into that English vector space. If cross-language Italian-to-English
+search becomes a hard requirement, use a real multilingual model and rebuild
+all document vectors; do not mix multilingual query vectors with existing
+English-model document vectors.
+
+## Important interpretation notes
+
+### “Runs locally” is not the same as “ships offline”
+
+Transformers.js, Sentence Transformers, FastEmbed, Chroma, and RuVector all run
+inference locally after model acquisition. Their normal constructors still
+resolve model files from a model hub or configured URL. This is why their rows
+are marked ❌ even though their marketing correctly describes local inference.
+
+### Model size versus runtime size
+
+MiniLM's 21.91 MiB Q8 ONNX file is not the entire standalone-browser cost. The
+validated browser runtime also embeds tokenizer files and about 12.86 MiB of
+ONNX Runtime WASM. Conversely, Ternlight fuses model, tokenizer, and inference
+engine into one WASM file, so its model-only weight size cannot be measured
+separately.
+
+### Model identity is part of stored data
+
+Vectors from different models, revisions, quantizations, pooling rules, or
+normalization rules are not comparable. Persist the complete model identity and
+re-embed the corpus after any change.
+
+## Evidence and sources
+
+Checked on 23.07.2026:
+
+- [Ternlight Mini NPM package](https://www.npmjs.com/package/@ternlight/mini)
+- [Ternlight Base NPM package](https://www.npmjs.com/package/@ternlight/base)
+- [Bundled MiniLM NPM package](https://www.npmjs.com/package/@plurnk/plurnk-mimetypes-embeddings)
+- [Transformers.js Hub loading API](https://huggingface.co/docs/transformers.js/api/utils/hub)
+- [all-MiniLM-L6-v2 model card](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2)
+- [multilingual MiniLM model card](https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2)
+- [Sentence Transformers multilingual documentation](https://sbert.net/examples/sentence_transformer/training/multilingual/README.html)
+- [FastEmbed supported-model table](https://qdrant.github.io/fastembed/examples/Supported_Models/)
+- [RuVector ONNX embeddings WASM package](https://www.npmjs.com/package/ruvector-onnx-embeddings-wasm)
+- [Chroma default embedder package](https://www.npmjs.com/package/@chroma-core/default-embed)
+
+Local archive inspection supplied the exact Ternlight WASM and bundled MiniLM
+ONNX sizes. Hugging Face repository metadata supplied the model-file sizes and
+repository dates for hub-delivered rows. NPM registry metadata supplied the
+Ternlight release dates.
+
